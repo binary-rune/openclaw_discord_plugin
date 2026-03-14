@@ -11,6 +11,161 @@ The official OpenClaw Discord channel has a bug (issue [#27409](https://github.c
 
 This plugin provides a complete workaround by implementing a Discord channel handler with proper proxy support for both WebSocket and REST API calls.
 
+## Architecture
+
+### How the Plugin Works
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            OpenClaw Gateway                                  │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │                         Plugin System                                   │ │
+│  │                                                                         │ │
+│  │  ┌─────────────────────────────────────────────────────────────────┐   │ │
+│  │  │              Discord Proxy Plugin (This Plugin)                  │   │ │
+│  │  │                                                                  │   │ │
+│  │  │  ┌──────────────────┐    ┌──────────────────┐                  │   │ │
+│  │  │  │  createDiscord   │───▶│  HttpsProxyAgent │                  │   │ │
+│  │  │  │  Client()        │    │  Injection       │                  │   │ │
+│  │  │  │                  │    │                  │                  │   │ │
+│  │  │  │  - Configures    │    │  - Wraps HTTP    │                  │   │ │
+│  │  │  │    Intents       │    │    requests      │                  │   │ │
+│  │  │  │  - Sets up       │    │  - Routes all    │                  │   │ │
+│  │  │  │    Event         │    │    traffic       │                  │   │ │
+│  │  │  │    Handlers      │    │    through proxy │                  │   │ │
+│  │  │  └──────────────────┘    └──────────────────┘                  │   │ │
+│  │  │           │                       │                             │   │ │
+│  │  │           ▼                       ▼                             │   │ │
+│  │  │  ┌─────────────────────────────────────────────────────────┐   │   │ │
+│  │  │  │           discord.js Client (v14)                        │   │   │ │
+│  │  │  │                                                          │   │   │ │
+│  │  │  │  • WebSocket Connection ──┐                             │   │   │ │
+│  │  │  │  • REST API Calls ────────┼──▶ Both use proxy agent     │   │   │ │
+│  │  │  │  • Event Processing       │                             │   │   │ │
+│  │  │  └─────────────────────────────────────────────────────────┘   │   │ │
+│  │  └─────────────────────────────────────────────────────────────────┘   │ │
+│  │                                                                         │ │
+│  │  ┌─────────────────────────────────────────────────────────────────┐   │ │
+│  │  │              Message Flow                                        │   │ │
+│  │  │                                                                  │   │ │
+│  │  │   Inbound: Discord → Plugin → Session Key → OpenClaw Agent     │   │ │
+│  │  │   Outbound: OpenClaw Agent → Plugin → Discord (via proxy)      │   │ │
+│  │  └─────────────────────────────────────────────────────────────────┘   │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+                          ┌───────────────────────┐
+                          │    HTTP Proxy         │
+                          │  (e.g., 127.0.0.1:7890)│
+                          └───────────────────────┘
+                                      │
+                                      ▼
+                          ┌───────────────────────┐
+                          │    Discord API        │
+                          │  • Gateway (WS)       │
+                          │  • REST (HTTPS)       │
+                          └───────────────────────┘
+```
+
+### Key Fix: Proxy Injection Point
+
+The critical fix for issue #27409 is injecting the proxy agent at client creation time:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Official Channel (Bug)        │  Discord Proxy Plugin (Fixed)     │
+│────────────────────────────────┼──────────────────────────────────│
+│                                │                                   │
+│  Discord.js Client             │  Discord.js Client                │
+│  ┌──────────────────────┐     │  ┌──────────────────────┐         │
+│  │ WebSocket: ✓ Proxy   │     │  │ WebSocket: ✓ Proxy   │         │
+│  │ REST: ✗ No Proxy     │     │  │ REST: ✓ Proxy        │         │
+│  │ (fetch failed)       │     │  │ (via HttpsProxyAgent)│         │
+│  └──────────────────────┘     │  └──────────────────────┘         │
+│                               │            ▲                       │
+│  Config: proxy set            │            │                       │
+│  Result: Partial working      │  Config: proxy set                │
+│                               │  Result: Full proxy support        │
+└───────────────────────────────┴────────────────────────────────────┘
+
+The Fix (src/index.ts: createDiscordClient):
+─────────────────────────────────────────────
+if (proxyUrl) {
+  const proxyAgent = new HttpsProxyAgent(proxyUrl);
+  clientOptions.rest = {
+    agent: proxyAgent as any,  // ← Injects proxy into REST calls
+  };
+}
+```
+
+### Integration with OpenClaw
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        OpenClaw Ecosystem                                    │
+│                                                                              │
+│   ┌─────────────┐     ┌──────────────┐     ┌─────────────────────────────┐ │
+│   │   User      │────▶│  Discord     │────▶│  Discord Proxy Plugin       │ │
+│   │  Message    │     │  Bot/Gateway │     │  - Message received         │ │
+│   │             │◀────│              │◀────│  - Session key generated    │ │
+│   └─────────────┘     └──────────────┘     │  - Forward to OpenClaw      │ │
+│                                            └──────────┬──────────────────┘ │
+│                                                       │                     │
+│                                                       ▼                     │
+│                                            ┌─────────────────────────────┐ │
+│                                            │  OpenClaw Gateway           │ │
+│                                            │  - Session routing          │ │
+│                                            │  - Agent workspace          │ │
+│                                            │  - Memory/context           │ │
+│                                            └──────────┬──────────────────┘ │
+│                                                       │                     │
+│                                                       ▼                     │
+│                                            ┌─────────────────────────────┐ │
+│                                            │  Pi Agent (LLM)             │ │
+│                                            │  - Process message          │ │
+│                                            │  - Generate response        │ │
+│                                            └──────────┬──────────────────┘ │
+│                                                       │                     │
+│                                                       ▼                     │
+│                                            ┌─────────────────────────────┐ │
+│                                            │  Discord Proxy Plugin       │ │
+│                                            │  - Receive response         │ │
+│                                            │  - Send via proxy           │ │
+│                                            └──────────┬──────────────────┘ │
+│                                                       │                     │
+│                                                       ▼                     │
+│                                            ┌──────────────┐                │
+│                                            │   Discord    │                │
+│                                            │   (via proxy)│                │
+│                                            └──────────────┘                │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Session Key Generation
+
+The plugin generates OpenClaw-compatible session keys for proper message routing:
+
+```typescript
+// For DM messages:
+{
+  agentId: 'default',
+  channel: 'discord',
+  accountId: 'default',
+  peer: '<user_id>'
+}
+
+// For guild messages:
+{
+  agentId: 'default',
+  channel: 'discord',
+  accountId: 'default',
+  guildId: '<guild_id>',
+  channelId: '<channel_id>'
+}
+```
+
 ## Features
 
 - ✅ **Full proxy support** for both WebSocket and REST API calls
