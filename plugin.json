@@ -1,0 +1,136 @@
+{
+  "name": "discord-proxy",
+  "displayName": "Discord Proxy",
+  "version": "1.0.0",
+  "description": "A workaround Discord channel plugin that properly respects proxy configuration for both WebSocket and REST API calls (fixes issue #27409)",
+  "author": "binary-rune",
+  "license": "MIT",
+  "homepage": "https://github.com/binary-rune/openclaw_discord_plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/binary-rune/openclaw_discord_plugin.git"
+  },
+  "main": "dist/index.js",
+  "engines": {
+    "openclaw": ">=2024.1.0"
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the Discord Proxy channel"
+      },
+      "token": {
+        "type": "string",
+        "description": "Discord bot token (use SecretRef for production)",
+        "sensitive": true
+      },
+      "proxy": {
+        "type": "string",
+        "format": "uri",
+        "description": "HTTP/HTTPS proxy URL (e.g., http://127.0.0.1:7890)",
+        "examples": ["http://127.0.0.1:7890", "https://proxy.example.com:8080"]
+      },
+      "deviceId": {
+        "type": "string",
+        "description": "Device identifier for session management",
+        "default": "openclaw-discord-proxy-default"
+      },
+      "dmPolicy": {
+        "type": "string",
+        "enum": ["pairing", "allowlist", "open", "disabled"],
+        "default": "pairing",
+        "description": "DM access policy"
+      },
+      "groupPolicy": {
+        "type": "string",
+        "enum": ["open", "allowlist", "disabled"],
+        "default": "allowlist",
+        "description": "Guild message policy"
+      },
+      "guilds": {
+        "type": "object",
+        "description": "Guild-specific configuration",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "requireMention": {
+              "type": "boolean",
+              "default": true
+            },
+            "users": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "channels": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "allow": { "type": "boolean" },
+                  "requireMention": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "allowFrom": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Allowed user IDs for DMs"
+      },
+      "intents": {
+        "type": "object",
+        "properties": {
+          "messageContent": { "type": "boolean", "default": true },
+          "serverMembers": { "type": "boolean", "default": true },
+          "presence": { "type": "boolean", "default": false }
+        }
+      },
+      "streaming": {
+        "type": "string",
+        "enum": ["off", "partial", "block"],
+        "default": "partial"
+      },
+      "replyToMode": {
+        "type": "string",
+        "enum": ["off", "first", "all"],
+        "default": "off"
+      },
+      "historyLimit": {
+        "type": "integer",
+        "default": 20,
+        "minimum": 0,
+        "maximum": 100
+      },
+      "accounts": {
+        "type": "object",
+        "description": "Multiple bot account configuration",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "token": { "type": "string", "sensitive": true },
+            "proxy": { "type": "string", "format": "uri" },
+            "deviceId": { "type": "string" }
+          }
+        }
+      }
+    },
+    "required": ["token"]
+  },
+  "capabilities": [
+    "channel:discord",
+    "proxy-support",
+    "multi-account",
+    "device-id"
+  ],
+  "tags": [
+    "discord",
+    "proxy",
+    "messaging",
+    "workaround"
+  ]
+}

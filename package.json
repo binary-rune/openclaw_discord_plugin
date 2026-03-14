@@ -1,0 +1,39 @@
+{
+  "name": "openclaw-discord-proxy",
+  "version": "1.0.0",
+  "description": "A workaround plugin for OpenClaw's Discord channel that properly respects proxy configuration for both WebSocket and REST API calls",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "openclaw",
+    "discord",
+    "proxy",
+    "plugin"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "https-proxy-agent": "^7.0.4",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.5",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist",
+    "plugin.json",
+    "README.md"
+  ]
+}
