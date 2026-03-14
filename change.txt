@@ -1,0 +1,431 @@
+# OpenClaw Discord Bridge - Implementation Guide
+
+## Overview
+
+This document describes two approaches to enable Discord integration with full proxy support:
+
+1. **Standalone Bridge** (RECOMMENDED) - Run independently from OpenClaw, forwards messages via HTTP API
+2. **ChannelPlugin Implementation** - Integrate as a full OpenClaw channel plugin
+
+## Approach 1: Standalone Bridge (RECOMMENDED)
+
+The standalone bridge runs as a separate Node.js application that:
+- Connects to Discord with full proxy support (HttpsProxyAgent)
+- Forwards messages to OpenClaw's HTTP API
+- Sends responses back to Discord via proxy
+
+### Why This Approach?
+
+- ✅ Works immediately without OpenClaw plugin integration complexity
+- ✅ Full proxy support for WebSocket and REST API
+- ✅ Independent lifecycle - can restart bridge without restarting OpenClaw
+- ✅ Simpler debugging and testing
+- ✅ No ChannelPlugin interface implementation required
+
+### Files
+
+- `/root/pluginupdate/bridge.ts` - Standalone bridge application
+- `/root/pluginupdate/README.md` - Usage instructions
+
+### Quick Start
+
+```bash
+cd /root/pluginupdate
+
+# Run with ts-node
+DISCORD_TOKEN="YOUR_BOT_TOKEN" \
+PROXY_URL="http://127.0.0.1:7890" \
+OPENCLAW_HTTP_URL="http://127.0.0.1:18789" \
+OPENCLAW_AUTH_TOKEN="your-auth-token" \
+npx ts-node bridge.ts
+```
+
+### Running as a Service
+
+See `/root/pluginupdate/README.md` for systemd service configuration.
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DISCORD_TOKEN` | Yes | - | Discord bot token |
+| `PROXY_URL` | No | `http://127.0.0.1:7890` | HTTP/HTTPS proxy URL |
+| `OPENCLAW_HTTP_URL` | No | `http://127.0.0.1:18789` | OpenClaw HTTP API URL |
+| `OPENCLAW_AUTH_TOKEN` | No | - | OpenClaw auth token |
+| `DM_POLICY` | No | `open` | DM policy: `open`, `pairing`, `allowlist`, `disabled` |
+| `GROUP_POLICY` | No | `allowlist` | Guild policy |
+
+---
+
+## Approach 2: ChannelPlugin Implementation
+
+This approach integrates the discord-proxy as a full OpenClaw channel plugin.
+See the detailed specification below.
+
+## Problem Statement
+
+The official OpenClaw Discord channel has a bug (issue #27409) where:
+- Gateway WebSocket connections respect the proxy configuration ✓
+- REST API calls (sending messages) do NOT respect the proxy configuration ✗
+- Result: Bot can receive messages but cannot send replies, showing "fetch failed" errors
+
+## Current State
+
+### Plugin Location
+- Installed: `/usr/lib/node_modules/openclaw/extensions/discord-proxy/`
+- Source for modification: `/root/pluginupdate/`
+
+### What Works
+- Plugin loads and appears in plugin list
+- Proxy configuration is accepted
+- Discord bot can connect via proxy
+- Messages are received from Discord
+
+### What Doesn't Work
+- Plugin cannot be enabled as a channel
+- Config validation fails with "unknown channel id: discord-proxy"
+- Missing ChannelPlugin interface implementation
+
+## Required Changes
+
+### 1. Implement OpenClaw ChannelPlugin Interface
+
+The plugin must implement the `ChannelPlugin` interface from `openclaw/plugin-sdk`. Study the existing Discord channel implementation at:
+```
+/usr/lib/node_modules/openclaw/extensions/discord/src/channel.ts
+```
+
+#### Required Interface Components
+
+```typescript
+import type { ChannelPlugin, ChannelMessageActionAdapter } from "openclaw/plugin-sdk";
+
+export const discordProxyPlugin: ChannelPlugin<ResolvedDiscordProxyAccount> = {
+  id: "discord-proxy",
+  meta: {
+    // Channel metadata (name, icon, capabilities)
+  },
+  onboarding: {
+    // Setup wizard configuration
+  },
+  pairing: {
+    // Device pairing configuration
+  },
+  capabilities: {
+    chatTypes: ["direct", "channel", "thread"],
+    polls: boolean,
+    reactions: boolean,
+    threads: boolean,
+    media: boolean,
+    nativeCommands: boolean,
+  },
+  streaming: {
+    // Message streaming configuration
+  },
+  reload: { 
+    configPrefixes: ["channels.discord-proxy"] 
+  },
+  configSchema: buildChannelConfigSchema(DiscordProxyConfigSchema),
+  config: {
+    // Account configuration methods
+    listAccountIds: (cfg) => ...,
+    resolveAccount: (cfg, accountId) => ...,
+    defaultAccountId: (cfg) => ...,
+    setAccountEnabled: ({ cfg, accountId, enabled }) => ...,
+    deleteAccount: ({ cfg, accountId }) => ...,
+    isConfigured: (account) => ...,
+    describeAccount: (account) => ...,
+    resolveAllowFrom: ({ cfg, accountId }) => ...,
+    formatAllowFrom: ({ allowFrom }) => ...,
+    resolveDefaultTo: ({ cfg, accountId }) => ...,
+  },
+  security: {
+    resolveDmPolicy: ({ cfg, accountId, account }) => ...,
+    collectWarnings: ({ account, cfg }) => ...,
+  },
+  groups: {
+    resolveRequireMention: ...,
+    resolveToolPolicy: ...,
+  },
+  mentions: {
+    stripPatterns: () => [...],
+  },
+  threading: {
+    resolveReplyToMode: ({ cfg }) => ...,
+  },
+  messaging: {
+    normalizeTarget: ...,
+    targetResolver: {
+      looksLikeId: ...,
+      hint: "...",
+    },
+  },
+  directory: {
+    self: async () => ...,
+    listPeers: async (params) => ...,
+    listGroups: async (params) => ...,
+    listPeersLive: async (params) => ...,
+    listGroupsLive: async (params) => ...,
+  },
+  resolver: {
+    resolveTargets: async ({ cfg, accountId, inputs, kind }) => ...,
+  },
+  actions: discordProxyMessageActions,
+  outbound: {
+    deliveryMode: "direct",
+    chunker: null,
+    textChunkLimit: 2000,
+    pollMaxOptions: 10,
+    resolveTarget: ({ to }) => ...,
+    sendText: async ({ to, text, accountId, deps, replyToId, silent }) => ...,
+    sendMedia: async ({ to, text, mediaUrl, ... }) => ...,
+    sendPoll: async ({ to, poll, accountId, silent }) => ...,
+  },
+  status: {
+    defaultRuntime: { ... },
+    collectStatusIssues: ...,
+    buildChannelSummary: ...,
+    probeAccount: async ({ account, timeoutMs }) => ...,
+    auditAccount: async ({ account, timeoutMs, cfg }) => ...,
+    buildAccountSnapshot: ({ account, runtime, probe, audit }) => ...,
+  },
+  gateway: {
+    startAccount: async (ctx) => {
+      // Start the Discord bot with proxy support
+    },
+  },
+};
+```
+
+### 2. Key Integration Points
+
+#### A. Proxy Injection in outbound.sendText
+
+This is the critical fix for issue #27409. The `sendText` method must use the proxy-aware Discord client:
+
+```typescript
+sendText: async ({ to, text, accountId, deps, replyToId, silent }) => {
+  const account = resolveDiscordProxyAccount({ cfg, accountId });
+  const proxyUrl = account.proxy;
+  
+  // Create HttpsProxyAgent for this request
+  const { HttpsProxyAgent } = await import('https-proxy-agent');
+  const proxyAgent = new HttpsProxyAgent(proxyUrl);
+  
+  // Use discord.js with proxy agent
+  const { Client, GatewayIntentBits } = await import('discord.js');
+  const client = new Client({
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
+    rest: { agent: proxyAgent as any }, // KEY FIX: Inject proxy agent
+  });
+  
+  await client.login(account.token);
+  
+  const channel = await client.channels.fetch(to);
+  if (channel && 'send' in channel) {
+    await channel.send({ content: text });
+  }
+  
+  await client.destroy();
+  
+  return { channel: "discord-proxy", messageId: "..." };
+}
+```
+
+#### B. Gateway Account Management
+
+```typescript
+gateway: {
+  startAccount: async (ctx) => {
+    const account = ctx.account;
+    const token = account.token.trim();
+    const proxyUrl = account.proxy || ctx.cfg.channels?.["discord-proxy"]?.proxy;
+    
+    // Import the existing proxy client creation logic
+    const { createDiscordClientWithProxy } = await import('./dist/client.js');
+    
+    const client = createDiscordClientWithProxy(token, proxyUrl);
+    
+    // Set up message handlers
+    client.on(Events.MessageCreate, async (message) => {
+      // Forward to OpenClaw via ctx.send()
+    });
+    
+    await client.login(token);
+    
+    // Return cleanup function
+    return async () => {
+      await client.destroy();
+    };
+  },
+}
+```
+
+### 3. File Structure
+
+Create/modify these files in `/root/pluginupdate/`:
+
+```
+/root/pluginupdate/
+├── src/
+│   ├── index.ts          # Main plugin entry (existing)
+│   ├── channel.ts        # NEW: ChannelPlugin implementation
+│   ├── client.ts         # Discord client with proxy (existing)
+│   ├── types.ts          # Type definitions (existing)
+│   ├── runtime.ts        # NEW: Runtime state management
+│   └── utils.ts          # NEW: Helper functions
+├── index.ts              # Plugin wrapper (modify)
+├── openclaw.plugin.json  # Plugin manifest (modify)
+├── package.json          # Dependencies
+└── tsconfig.json         # TypeScript config
+```
+
+### 4. Step-by-Step Implementation Plan
+
+#### Step 1: Create Runtime Module (`src/runtime.ts`)
+```typescript
+import type { ChannelRuntime } from "openclaw/plugin-sdk";
+
+interface DiscordProxyRuntime {
+  clients: Map<string, any>; // accountId -> Discord Client
+  status: Map<string, any>;  // accountId -> status info
+}
+
+const runtime = new Map<string, DiscordProxyRuntime>();
+
+export function getDiscordProxyRuntime(): DiscordProxyRuntime {
+  // Return or create runtime instance
+}
+
+export function setDiscordProxyRuntime(rt: DiscordProxyRuntime): void {
+  // Store runtime instance
+}
+```
+
+#### Step 2: Create Channel Implementation (`src/channel.ts`)
+- Import and adapt code from existing `src/index.ts`
+- Implement all ChannelPlugin interface methods
+- Use the proxy-aware client for all outbound operations
+
+#### Step 3: Update Plugin Wrapper (`index.ts`)
+```typescript
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { discordProxyPlugin } from "./src/channel.js";
+
+const plugin = {
+  id: "discord-proxy",
+  name: "Discord Proxy",
+  description: "Discord Proxy channel with full proxy support",
+  async register(api: OpenClawPluginApi) {
+    api.registerChannel({ plugin: discordProxyPlugin });
+  },
+};
+
+export default plugin;
+```
+
+#### Step 4: Update Plugin Manifest (`openclaw.plugin.json`)
+```json
+{
+  "id": "discord-proxy",
+  "name": "Discord Proxy",
+  "main": "index.ts",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "enabled": { "type": "boolean", "default": false },
+      "token": { "type": "string", "sensitive": true },
+      "proxy": { "type": "string", "format": "uri" },
+      ...
+    },
+    "required": ["token"]
+  }
+}
+```
+
+### 5. Build and Deploy
+
+```bash
+cd /root/pluginupdate
+
+# Install dependencies
+npm install
+
+# Build TypeScript
+npm run build
+
+# Copy to OpenClaw extensions
+cp -r dist/* /usr/lib/node_modules/openclaw/extensions/discord-proxy/dist/
+cp index.ts /usr/lib/node_modules/openclaw/extensions/discord-proxy/
+cp openclaw.plugin.json /usr/lib/node_modules/openclaw/extensions/discord-proxy/
+
+# Restart gateway
+openclaw gateway restart
+
+# Verify plugin loads
+openclaw plugins list | grep discord
+```
+
+### 6. Configuration
+
+After successful implementation:
+
+```bash
+# Disable official Discord channel
+openclaw config set channels.discord.enabled false --json
+
+# Enable discord-proxy channel
+openclaw config set channels.discord-proxy.enabled true --json
+openclaw config set channels.discord-proxy.token "YOUR_BOT_TOKEN" --json
+openclaw config set channels.discord-proxy.proxy "http://127.0.0.1:7890" --json
+openclaw config set channels.discord-proxy.groupPolicy "open" --json
+
+# Restart gateway
+openclaw gateway restart
+```
+
+## Testing
+
+After implementation, test:
+
+1. **Plugin loads without errors:**
+   ```bash
+   openclaw plugins list | grep discord-proxy
+   ```
+
+2. **Channel can be enabled:**
+   ```bash
+   openclaw config set channels.discord-proxy.enabled true --json
+   ```
+
+3. **Bot receives messages:**
+   - Send a message to the bot in Discord
+   - Check OpenClaw logs for inbound message
+
+4. **Bot sends replies through proxy:**
+   - Trigger a response from the bot
+   - Check logs for "fetch failed" errors (should NOT appear)
+   - Verify message appears in Discord
+
+## Reference Files
+
+- Official Discord channel: `/usr/lib/node_modules/openclaw/extensions/discord/`
+- Discord channel source: `/usr/lib/node_modules/openclaw/extensions/discord/src/channel.ts`
+- Current proxy plugin: `/root/pluginupdate/`
+- Plugin SDK types: Check `openclaw/plugin-sdk` package
+
+## Key Success Criteria
+
+1. ✅ Plugin loads without errors
+2. ✅ Channel can be enabled via config
+3. ✅ Messages are received from Discord
+4. ✅ Replies are sent successfully through proxy
+5. ✅ No "fetch failed" errors in logs
+6. ✅ All ChannelPlugin methods implemented
+
+## Notes
+
+- The existing `src/index.ts` has the correct proxy injection logic - reuse it
+- The main work is wrapping it in OpenClaw's ChannelPlugin interface
+- Study `/usr/lib/node_modules/openclaw/extensions/discord/src/channel.ts` for patterns
+- The `outbound.sendText` method is where the proxy fix must be applied

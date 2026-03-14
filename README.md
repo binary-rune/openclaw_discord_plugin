@@ -1,81 +1,45 @@
-# OpenClaw Discord Proxy Plugin
+# OpenClaw Discord Bridge
 
-A workaround plugin for OpenClaw's Discord channel that properly respects proxy configuration for both WebSocket and REST API calls.
+A **standalone** Discord-to-OpenClaw bridge with full proxy support for both WebSocket and REST API calls.
 
-## Problem
+## Problem Solved
 
 The official OpenClaw Discord channel has a bug (issue [#27409](https://github.com/openclaw/openclaw/issues/27409)) where:
 - Gateway WebSocket connections respect the proxy configuration ✓
 - REST API calls (sending messages) do NOT respect the proxy configuration ✗
 - Result: Bot can receive messages but cannot send replies, showing "fetch failed" errors
 
-This plugin provides a complete workaround by implementing a Discord channel handler with proper proxy support for both WebSocket and REST API calls.
+This standalone bridge provides a complete workaround by:
+- Running independently from OpenClaw
+- Using `HttpsProxyAgent` for **both** WebSocket and REST API calls
+- Forwarding messages to OpenClaw via HTTP API
 
 ## Architecture
 
-### How the Plugin Works
-
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            OpenClaw Gateway                                  │
-│                                                                              │
-│  ┌────────────────────────────────────────────────────────────────────────┐ │
-│  │                         Plugin System                                   │ │
-│  │                                                                         │ │
-│  │  ┌─────────────────────────────────────────────────────────────────┐   │ │
-│  │  │              Discord Proxy Plugin (This Plugin)                  │   │ │
-│  │  │                                                                  │   │ │
-│  │  │  ┌──────────────────┐    ┌──────────────────┐                  │   │ │
-│  │  │  │  createDiscord   │───▶│  HttpsProxyAgent │                  │   │ │
-│  │  │  │  Client()        │    │  Injection       │                  │   │ │
-│  │  │  │                  │    │                  │                  │   │ │
-│  │  │  │  - Configures    │    │  - Wraps HTTP    │                  │   │ │
-│  │  │  │    Intents       │    │    requests      │                  │   │ │
-│  │  │  │  - Sets up       │    │  - Routes all    │                  │   │ │
-│  │  │  │    Event         │    │    traffic       │                  │   │ │
-│  │  │  │    Handlers      │    │    through proxy │                  │   │ │
-│  │  │  └──────────────────┘    └──────────────────┘                  │   │ │
-│  │  │           │                       │                             │   │ │
-│  │  │           ▼                       ▼                             │   │ │
-│  │  │  ┌─────────────────────────────────────────────────────────┐   │   │ │
-│  │  │  │           discord.js Client (v14)                        │   │   │ │
-│  │  │  │                                                          │   │   │ │
-│  │  │  │  • WebSocket Connection ──┐                             │   │   │ │
-│  │  │  │  • REST API Calls ────────┼──▶ Both use proxy agent     │   │   │ │
-│  │  │  │  • Event Processing       │                             │   │   │ │
-│  │  │  └─────────────────────────────────────────────────────────┘   │   │ │
-│  │  └─────────────────────────────────────────────────────────────────┘   │ │
-│  │                                                                         │ │
-│  │  ┌─────────────────────────────────────────────────────────────────┐   │ │
-│  │  │              Message Flow                                        │   │ │
-│  │  │                                                                  │   │ │
-│  │  │   Inbound: Discord → Plugin → Session Key → OpenClaw Agent     │   │ │
-│  │  │   Outbound: OpenClaw Agent → Plugin → Discord (via proxy)      │   │ │
-│  │  └─────────────────────────────────────────────────────────────────┘   │ │
-│  └─────────────────────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-                          ┌───────────────────────┐
-                          │    HTTP Proxy         │
-                          │  (e.g., 127.0.0.1:7890)│
-                          └───────────────────────┘
-                                      │
-                                      ▼
-                          ┌───────────────────────┐
-                          │    Discord API        │
-                          │  • Gateway (WS)       │
-                          │  • REST (HTTPS)       │
-                          └───────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                    Standalone Bridge                             │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────┐ │
+│  │  Discord Bot    │───▶│  Message Router │───▶│  OpenClaw   │ │
+│  │  (with proxy)   │    │  (session mgmt) │    │  HTTP API   │ │
+│  └─────────────────┘    └─────────────────┘    └─────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+                    ┌───────────────────────────────┐
+                    │    OpenClaw Gateway           │
+                    │    (port 18789)               │
+                    │    - HTTP API endpoint        │
+                    │    - Auth token validation    │
+                    │    - Message ingestion        │
+                    └───────────────────────────────┘
 ```
 
-### Key Fix: Proxy Injection Point
-
-The critical fix for issue #27409 is injecting the proxy agent at client creation time:
+### Key Fix: Proxy Injection
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Official Channel (Bug)        │  Discord Proxy Plugin (Fixed)     │
+│  Official Channel (Bug)        │  Standalone Bridge (Fixed)        │
 │────────────────────────────────┼──────────────────────────────────│
 │                                │                                   │
 │  Discord.js Client             │  Discord.js Client                │
@@ -89,104 +53,17 @@ The critical fix for issue #27409 is injecting the proxy agent at client creatio
 │  Result: Partial working      │  Config: proxy set                │
 │                               │  Result: Full proxy support        │
 └───────────────────────────────┴────────────────────────────────────┘
-
-The Fix (src/index.ts: createDiscordClient):
-─────────────────────────────────────────────
-if (proxyUrl) {
-  const proxyAgent = new HttpsProxyAgent(proxyUrl);
-  clientOptions.rest = {
-    agent: proxyAgent as any,  // ← Injects proxy into REST calls
-  };
-}
 ```
 
-### Integration with OpenClaw
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        OpenClaw Ecosystem                                    │
-│                                                                              │
-│   ┌─────────────┐     ┌──────────────┐     ┌─────────────────────────────┐ │
-│   │   User      │────▶│  Discord     │────▶│  Discord Proxy Plugin       │ │
-│   │  Message    │     │  Bot/Gateway │     │  - Message received         │ │
-│   │             │◀────│              │◀────│  - Session key generated    │ │
-│   └─────────────┘     └──────────────┘     │  - Forward to OpenClaw      │ │
-│                                            └──────────┬──────────────────┘ │
-│                                                       │                     │
-│                                                       ▼                     │
-│                                            ┌─────────────────────────────┐ │
-│                                            │  OpenClaw Gateway           │ │
-│                                            │  - Session routing          │ │
-│                                            │  - Agent workspace          │ │
-│                                            │  - Memory/context           │ │
-│                                            └──────────┬──────────────────┘ │
-│                                                       │                     │
-│                                                       ▼                     │
-│                                            ┌─────────────────────────────┐ │
-│                                            │  Pi Agent (LLM)             │ │
-│                                            │  - Process message          │ │
-│                                            │  - Generate response        │ │
-│                                            └──────────┬──────────────────┘ │
-│                                                       │                     │
-│                                                       ▼                     │
-│                                            ┌─────────────────────────────┐ │
-│                                            │  Discord Proxy Plugin       │ │
-│                                            │  - Receive response         │ │
-│                                            │  - Send via proxy           │ │
-│                                            └──────────┬──────────────────┘ │
-│                                                       │                     │
-│                                                       ▼                     │
-│                                            ┌──────────────┐                │
-│                                            │   Discord    │                │
-│                                            │   (via proxy)│                │
-│                                            └──────────────┘                │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Session Key Generation
-
-The plugin generates OpenClaw-compatible session keys for proper message routing:
-
-```typescript
-// For DM messages:
-{
-  agentId: 'default',
-  channel: 'discord',
-  accountId: 'default',
-  peer: '<user_id>'
-}
-
-// For guild messages:
-{
-  agentId: 'default',
-  channel: 'discord',
-  accountId: 'default',
-  guildId: '<guild_id>',
-  channelId: '<channel_id>'
-}
-```
-
-## Features
-
-- ✅ **Full proxy support** for both WebSocket and REST API calls
-- ✅ **Device ID mechanism** for session management and identification
-- ✅ **Multi-account support** with per-account proxy configuration
-- ✅ **All official channel features**: DMs, guilds, pairing, allowlists
-- ✅ **Drop-in replacement** configuration (disable official, enable plugin)
-- ✅ **Thread bindings** for subagent sessions
-- ✅ **Interactive components** (buttons, selects, modals)
-- ✅ **Voice channel support** (with proxy)
-- ✅ **Exec approvals** via Discord buttons
-
-## Installation
+## Quick Start
 
 ### Prerequisites
 
 - Node.js >= 18.0.0
-- OpenClaw >= 2024.1.0
+- OpenClaw running with HTTP API enabled
 - A Discord bot token (get from [Discord Developer Portal](https://discord.com/developers/applications))
 
-### Install Steps
+### Installation
 
 ```bash
 # Clone the repository
@@ -196,244 +73,311 @@ cd openclaw_discord_plugin
 # Install dependencies
 npm install
 
-# Build the plugin
+# Build the bridge
 npm run build
-
-# Install in OpenClaw
-openclaw plugins install ./path/to/openclaw_discord_plugin
 ```
 
-## Configuration
+### Step 1: Configure OpenClaw HTTP API
 
-### Step 1: Disable Official Discord Channel
-
-Edit your `openclaw.json` or use CLI:
+First, you need to set up an auth token in OpenClaw for the bridge to use:
 
 ```bash
-# Disable the official Discord channel
-openclaw config set channels.discord.enabled false --json
+# Generate a secure auth token (you can use any secure string)
+# Option A: Use openssl to generate one
+openssl rand -hex 32
+
+# Option B: Use any secure string you prefer
+# Example: "my-secure-bridge-token-12345"
 ```
 
-This is important to prevent conflicts and duplicate connections.
-
-### Step 2: Configure Discord Proxy Plugin
-
-#### Using CLI (Recommended)
+Then configure OpenClaw to accept this token:
 
 ```bash
-# Set bot token
-openclaw config set channels.discordProxy.token "YOUR_BOT_TOKEN" --json
+# Set the HTTP auth token in OpenClaw
+openclaw config set http.authToken "YOUR_GENERATED_TOKEN" --json
 
-# Set proxy (CRITICAL - this is the fix for issue #27409)
-openclaw config set channels.discordProxy.proxy "http://127.0.0.1:7890" --json
-
-# Set device ID (optional, auto-generated if not provided)
-openclaw config set channels.discordProxy.deviceId "openclaw-discord-proxy-001" --json
-
-# Enable the plugin
-openclaw config set channels.discordProxy.enabled true --json
-
-# Restart gateway
+# Restart OpenClaw gateway to apply the config
 openclaw gateway restart
 ```
 
-#### Using Configuration File
+> **Important:** The `http.authToken` is used to authenticate incoming HTTP requests to OpenClaw's API. Keep this token secure and only share it with trusted services.
 
-```json5
-{
-  // Disable official Discord channel
-  "channels": {
-    "discord": {
-      "enabled": false
-    },
-    
-    // Enable Discord Proxy plugin
-    "discordProxy": {
-      "enabled": true,
-      "token": "YOUR_BOT_TOKEN",
-      "proxy": "http://127.0.0.1:7890",
-      "deviceId": "openclaw-discord-proxy-001",
-      
-      // DM policy (pairing, allowlist, open, disabled)
-      "dmPolicy": "pairing",
-      
-      // Guild policy (open, allowlist, disabled)
-      "groupPolicy": "allowlist",
-      
-      // Guild configuration
-      "guilds": {
-        "YOUR_SERVER_ID": {
-          "requireMention": false,
-          "users": ["YOUR_USER_ID"],
-          "channels": {
-            "general": { "allow": true },
-            "help": { "allow": true, "requireMention": true }
-          }
-        }
-      },
-      
-      // Allowed users for DMs (when dmPolicy is allowlist)
-      "allowFrom": ["YOUR_USER_ID"],
-      
-      // Gateway intents
-      "intents": {
-        "messageContent": true,
-        "serverMembers": true,
-        "presence": false
-      },
-      
-      // Streaming mode
-      "streaming": "partial",
-      
-      // Reply mode
-      "replyToMode": "off",
-      
-      // History limit
-      "historyLimit": 20
-    }
-  }
-}
-```
+### Step 2: Configure the Bridge
 
-### Step 3: Pair Your Discord Account
-
-If using `dmPolicy: "pairing"` (default):
-
-1. DM your bot in Discord
-2. Bot responds with a pairing code
-3. Approve the code:
+Create a `.env` file in the project directory:
 
 ```bash
-# List pending pairings
-openclaw pairing list discordProxy
+# Required: Discord bot token
+DISCORD_TOKEN=YOUR_BOT_TOKEN_HERE
 
-# Approve the pairing
-openclaw pairing approve discordProxy <CODE>
+# Required: Auth token you set in OpenClaw
+OPENCLAW_AUTH_TOKEN=YOUR_GENERATED_TOKEN
+
+# Optional: OpenClaw HTTP API URL (default: http://127.0.0.1:18789)
+OPENCLAW_HTTP_URL=http://127.0.0.1:18789
+
+# Optional: HTTP/HTTPS proxy URL (default: http://127.0.0.1:7890)
+# This is the KEY setting that fixes issue #27409
+PROXY_URL=http://127.0.0.1:7890
+
+# Optional: DM policy (open, pairing, allowlist, disabled)
+DM_POLICY=open
+
+# Optional: Guild policy (open, allowlist, disabled)
+GROUP_POLICY=allowlist
+
+# Optional: Device ID for session management
+DEVICE_ID=openclaw-discord-bridge
+
+# Optional: Allowed user IDs for DMs (comma-separated, for allowlist mode)
+ALLOW_FROM=123456789,987654321
 ```
 
-## Device ID Mechanism
-
-The plugin supports device identification for:
-- **Session persistence**: Messages from the same device map to the same session
-- **Multi-device support**: Different devices can have separate conversations
-- **Thread bindings**: Subagent sessions can be bound to specific device IDs
-
-### Device ID Configuration
-
-```json5
-{
-  "channels": {
-    "discordProxy": {
-      "deviceId": "my-custom-device-id",  // Custom device identifier
-      "accounts": {
-        "default": {
-          "deviceId": "account-specific-device-id"  // Per-account override
-        }
-      }
-    }
-  }
-}
-```
-
-### How Device ID Works
-
-1. **Inbound messages**: Device ID is extracted from the session context
-2. **Session routing**: Messages with the same device ID route to the same session
-3. **Thread bindings**: Subagent sessions can be bound to specific device IDs
-4. **Presence tracking**: Device status is tracked in the Gateway
-
-## Multi-Account Configuration
-
-You can configure multiple Discord bot accounts:
-
-```json5
-{
-  "channels": {
-    "discordProxy": {
-      "enabled": true,
-      "accounts": {
-        "default": {
-          "token": "BOT_TOKEN_1",
-          "proxy": "http://127.0.0.1:7890",
-          "deviceId": "device-1"
-        },
-        "secondary": {
-          "token": "BOT_TOKEN_2",
-          "proxy": "http://127.0.0.1:7891",
-          "deviceId": "device-2"
-        }
-      }
-    }
-  }
-}
-```
-
-## Environment Variables
-
-Alternative configuration using environment variables:
+### Step 3: Run the Bridge
 
 ```bash
-# Disable official Discord channel
-OPENCLAW_CHANNELS_DISCORD_ENABLED=false
+# Development mode (with ts-node)
+npm run start:dev
 
-# Enable and configure Discord Proxy plugin
-OPENCLAW_CHANNELS_DISCORDPROXY_ENABLED=true
-OPENCLAW_CHANNELS_DISCORDPROXY_TOKEN=YOUR_BOT_TOKEN
-OPENCLAW_CHANNELS_DISCORDPROXY_PROXY=http://127.0.0.1:7890
-OPENCLAW_CHANNELS_DISCORDPROXY_DEVICEID=openclaw-discord-proxy-001
-
-# Or use SecretRef for tokens (recommended for production)
-# See: https://docs.openclaw.ai/gateway/secrets
+# Or run the built version
+npm start
 ```
+
+Or with environment variables directly:
+
+```bash
+DISCORD_TOKEN="YOUR_BOT_TOKEN" \
+OPENCLAW_AUTH_TOKEN="YOUR_TOKEN" \
+PROXY_URL="http://127.0.0.1:7890" \
+OPENCLAW_HTTP_URL="http://127.0.0.1:18789" \
+npm start
+```
+
+### Step 4: Test the Connection
+
+1. Send a DM to your Discord bot
+2. Check the bridge logs for message forwarding
+3. Check OpenClaw logs for received messages
+
+```bash
+# Watch bridge logs
+npm start 2>&1 | tee bridge.log
+
+# Watch OpenClaw logs
+openclaw logs --follow
+```
+
+## Configuration Reference
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DISCORD_TOKEN` | Yes | - | Discord bot token |
+| `OPENCLAW_AUTH_TOKEN` | Yes | - | Auth token for OpenClaw HTTP API |
+| `OPENCLAW_HTTP_URL` | No | `http://127.0.0.1:18789` | OpenClaw HTTP API URL |
+| `PROXY_URL` | No | `http://127.0.0.1:7890` | HTTP/HTTPS proxy URL |
+| `DM_POLICY` | No | `open` | DM policy: `open`, `pairing`, `allowlist`, `disabled` |
+| `GROUP_POLICY` | No | `allowlist` | Guild policy: `open`, `allowlist`, `disabled` |
+| `DEVICE_ID` | No | `openclaw-discord-bridge` | Device ID for session management |
+| `ALLOW_FROM` | No | - | Comma-separated user IDs for allowlist mode |
+| `INTENT_MESSAGE_CONTENT` | No | `true` | Enable message content intent |
+| `INTENT_SERVER_MEMBERS` | No | `true` | Enable server members intent |
+| `INTENT_PRESENCE` | No | `false` | Enable presence intent |
+
+### DM Policies
+
+- `open`: Accept DMs from all users
+- `pairing`: Require pairing code approval (simplified in bridge mode)
+- `allowlist`: Only accept DMs from specified user IDs
+- `disabled`: Reject all DMs
+
+### Guild Policies
+
+- `open`: Accept messages from all guilds
+- `allowlist`: Only accept from configured guilds (TODO: implement guild config)
+- `disabled`: Reject all guild messages
+
+## Running as a Service
+
+### systemd Service (Linux)
+
+Create `/etc/systemd/system/openclaw-discord-bridge.service`:
+
+```ini
+[Unit]
+Description=OpenClaw Discord Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=your-user
+WorkingDirectory=/path/to/openclaw_discord_plugin
+Environment=DISCORD_TOKEN=YOUR_BOT_TOKEN
+Environment=OPENCLAW_AUTH_TOKEN=YOUR_TOKEN
+Environment=PROXY_URL=http://127.0.0.1:7890
+Environment=OPENCLAW_HTTP_URL=http://127.0.0.1:18789
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then enable and start the service:
+
+```bash
+# Reload systemd
+sudo systemctl daemon-reload
+
+# Enable service
+sudo systemctl enable openclaw-discord-bridge
+
+# Start service
+sudo systemctl start openclaw-discord-bridge
+
+# Check status
+sudo systemctl status openclaw-discord-bridge
+
+# View logs
+sudo journalctl -u openclaw-discord-bridge -f
+```
+
+### pm2 (Node.js Process Manager)
+
+```bash
+# Install pm2 globally
+npm install -g pm2
+
+# Start the bridge
+pm2 start npm --name "discord-bridge" -- start
+
+# Or with environment variables
+pm2 start npm --name "discord-bridge" -- start -- \
+  --DISCORD_TOKEN="YOUR_TOKEN" \
+  --OPENCLAW_AUTH_TOKEN="YOUR_TOKEN" \
+  --PROXY_URL="http://127.0.0.1:7890"
+
+# Or use a pm2 ecosystem config file
+pm2 start ecosystem.config.js
+
+# View status
+pm2 status
+
+# View logs
+pm2 logs discord-bridge
+```
+
+## Discord Bot Setup
+
+### Step 1: Create Discord Application
+
+1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
+2. Click **New Application**
+3. Name it (e.g., "OpenClaw Bridge")
+
+### Step 2: Create Bot
+
+1. Click **Bot** in the sidebar
+2. Click **Add Bot**
+3. Copy the bot token (click **Reset Token**)
+
+### Step 3: Enable Privileged Intents
+
+In the Bot settings, enable:
+- **Message Content Intent** (required)
+- **Server Members Intent** (recommended for allowlists)
+- **Presence Intent** (optional)
+
+### Step 4: Invite Bot to Server
+
+1. Click **OAuth2** → **URL Generator**
+2. Select scopes: `bot`, `applications.commands`
+3. Select bot permissions:
+   - View Channels
+   - Send Messages
+   - Read Message History
+   - Embed Links
+4. Copy the generated URL and open in browser
+5. Select your server and authorize
+
+### Step 5: Enable DMs
+
+For the bot to receive DMs:
+1. Right-click your server icon → **Privacy Settings**
+2. Enable **Direct Messages**
 
 ## Troubleshooting
 
-### Bot can't send messages
+### "fetch failed" errors
+
+This is the exact issue this bridge fixes. If you still see these errors:
 
 1. Verify proxy is running:
    ```bash
    curl -x http://127.0.0.1:7890 https://discord.com/api/users/@me
    ```
 
-2. Check logs:
+2. Check proxy URL format (include `http://` prefix)
+
+3. Verify proxy supports HTTPS connections
+
+### Bridge won't start
+
+1. Check environment variables are set:
    ```bash
-   openclaw logs --follow | grep discordProxy
+   env | grep -E "DISCORD|OPENCLAW"
    ```
 
-3. Verify token: Ensure bot token is correct and not expired
+2. Verify Discord token is valid
 
-### Pairing not working
+3. Check OpenClaw is running and HTTP API is accessible:
+   ```bash
+   curl http://127.0.0.1:18789/api/health
+   ```
 
-1. Ensure DMs are enabled from server members
-2. Check `dmPolicy` configuration
-3. Verify bot has permission to send DMs
+### Messages not reaching OpenClaw
 
-### Proxy connection issues
+1. Check bridge logs for "Message sent to OpenClaw"
 
-1. Test proxy with Discord API directly
-2. Check proxy authentication if required
-3. Verify proxy URL format (include `http://` prefix)
+2. Verify auth token matches:
+   ```bash
+   # In bridge .env
+   OPENCLAW_AUTH_TOKEN=your-token
+   
+   # In OpenClaw config
+   openclaw config get http.authToken --json
+   ```
 
-### "fetch failed" errors
+3. Test HTTP API directly:
+   ```bash
+   curl -X POST http://127.0.0.1:18789/api/v1/messages/ingest \
+     -H "Authorization: Bearer YOUR_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"sessionKey":{"agentId":"default","channel":"discord","accountId":"test"},"content":"test","timestamp":1234567890}'
+   ```
 
-This is the exact issue this plugin fixes. If you still see these errors:
-1. Verify the official Discord channel is disabled
-2. Verify the proxy URL is correct
-3. Check if your proxy supports HTTPS connections
+### Bot not receiving messages
 
-## Comparison: Official vs Plugin
+1. Verify bot is invited to server with correct permissions
 
-| Feature | Official Channel | Proxy Plugin |
-|---------|-----------------|---------------|
-| WebSocket via proxy | ✅ | ✅ |
-| REST API via proxy | ❌ (bug) | ✅ |
-| Device ID support | ✅ | ✅ |
-| Multi-account | ✅ | ✅ |
-| Pairing | ✅ | ✅ |
-| Guild allowlists | ✅ | ✅ |
-| Thread bindings | ✅ | ✅ |
-| Voice channels | ✅ | ✅ |
-| Exec approvals | ✅ | ✅ |
+2. Check Discord intents are enabled in Developer Portal
+
+3. Verify DMs are enabled from server members
+
+## Comparison: Plugin vs Standalone Bridge
+
+| Feature | Plugin Approach | Standalone Bridge |
+|---------|----------------|-------------------|
+| Proxy support (WebSocket) | ✅ | ✅ |
+| Proxy support (REST) | ✅ | ✅ |
+| Installation complexity | High (plugin system) | Low (standalone) |
+| Configuration | OpenClaw config | Environment variables |
+| Lifecycle | Tied to OpenClaw | Independent |
+| Debugging | Harder | Easier |
+| Restart impact | Requires OpenClaw restart | Independent restart |
+| HTTP API required | No | Yes |
 
 ## Development
 
@@ -441,27 +385,35 @@ This is the exact issue this plugin fixes. If you still see these errors:
 # Install dependencies
 npm install
 
-# Build
+# Build TypeScript
 npm run build
 
-# Watch mode
+# Watch mode (auto-rebuild on changes)
 npm run watch
 
-# Clean build
+# Run development version
+npm run start:dev
+
+# Clean build artifacts
 npm run clean
 ```
 
+## Security Considerations
+
+1. **Discord Token**: Keep your bot token secret. Never commit to version control.
+
+2. **Auth Token**: The `OPENCLAW_AUTH_TOKEN` authenticates bridge → OpenClaw. Use a strong random value.
+
+3. **Proxy**: If using a proxy, ensure it's trusted. The proxy can see all Discord traffic.
+
+4. **Network**: The bridge should run on the same network as OpenClaw, or use TLS for remote connections.
+
 ## License
 
-MIT License - See LICENSE file for details
-
-## Contributing
-
-Contributions welcome! Please read CONTRIBUTING.md first.
+MIT License
 
 ## Related Links
 
 - [OpenClaw Documentation](https://docs.openclaw.ai/)
 - [Discord Developer Portal](https://discord.com/developers/applications)
 - [Issue #27409](https://github.com/openclaw/openclaw/issues/27409)
-- [OpenClaw Discord Channel Docs](https://docs.openclaw.ai/channels/discord)

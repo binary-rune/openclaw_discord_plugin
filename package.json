@@ -1,20 +1,23 @@
 {
-  "name": "openclaw-discord-proxy",
+  "name": "openclaw-discord-bridge",
   "version": "1.0.0",
-  "description": "A workaround plugin for OpenClaw's Discord channel that properly respects proxy configuration for both WebSocket and REST API calls",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "description": "Standalone Discord bridge for OpenClaw with full proxy support (fixes issue #27409)",
+  "main": "dist/bridge.js",
+  "types": "dist/bridge.d.ts",
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
     "clean": "rm -rf dist",
+    "start": "node dist/bridge.js",
+    "start:dev": "ts-node src/bridge.ts",
     "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": [
     "openclaw",
     "discord",
+    "bridge",
     "proxy",
-    "plugin"
+    "messaging"
   ],
   "author": "",
   "license": "MIT",
@@ -26,6 +29,7 @@
   "devDependencies": {
     "@types/node": "^20.11.5",
     "@types/ws": "^8.5.10",
+    "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
   },
   "engines": {
@@ -33,7 +37,6 @@
   },
   "files": [
     "dist",
-    "plugin.json",
     "README.md"
   ]
 }
