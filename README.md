@@ -489,12 +489,7 @@ openclaw_discord_patch/
 ├── types.py           # Type definitions
 ├── requirements.txt   # Python dependencies
 ├── .env.example       # Example environment configuration
-├── README.md          # This file
-└── src/               # Legacy TypeScript code (deprecated)
-    ├── bridge.ts
-    ├── client.ts
-    ├── types.ts
-    └── index.ts
+└── README.md          # This documentation
 ```
 
 ## Security Considerations
@@ -508,18 +503,6 @@ openclaw_discord_patch/
 4. **Network**: The bridge should run on the same network as OpenClaw, or use TLS for remote connections.
 
 5. **Environment Variables**: Use `.env` file (gitignored) or system environment variables. Never hardcode secrets.
-
-## Comparison: TypeScript vs Python
-
-| Feature | TypeScript (Legacy) | Python (Current) |
-|---------|---------------------|------------------|
-| Proxy support (WebSocket) | ✅ | ✅ |
-| Proxy support (REST) | ✅ | ✅ |
-| Proxy protocols | HTTP, HTTPS | HTTP, HTTPS, SOCKS4, SOCKS5 |
-| Runtime | Node.js 18+ | Python 3.10+ |
-| Dependencies | discord.js, https-proxy-agent | discord.py, aiohttp, aiohttp-socks |
-| Setup complexity | Medium (npm, build) | Low (pip, no build) |
-| Proxy configuration | Manual agent injection | Built-in support |
 
 ## Related Links
 
