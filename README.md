@@ -1,6 +1,6 @@
-# OpenClaw Discord Bridge
+# OpenClaw Discord Bridge (Python)
 
-A **standalone** Discord-to-OpenClaw bridge with full proxy support for both WebSocket and REST API calls.
+A **standalone** Python Discord-to-OpenClaw bridge with full proxy support for both WebSocket and REST API calls.
 
 ## Problem Solved
 
@@ -11,55 +11,22 @@ The official OpenClaw Discord channel has a bug (issue [#27409](https://github.c
 
 This standalone bridge provides a complete workaround by:
 - Running independently from OpenClaw
-- Using `HttpsProxyAgent` for **both** WebSocket and REST API calls
+- Using `aiohttp` with `ProxyConnector` for **both** WebSocket and REST API calls
+- Using `discord.py` with built-in proxy support for Discord connections
 - Forwarding messages to OpenClaw via HTTP API
 
-## Architecture
+## Why Python?
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Standalone Bridge                             │
-│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────┐ │
-│  │  Discord Bot    │───▶│  Message Router │───▶│  OpenClaw   │ │
-│  │  (with proxy)   │    │  (session mgmt) │    │  HTTP API   │ │
-│  └─────────────────┘    └─────────────────┘    └─────────────┘ │
-└─────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-                    ┌───────────────────────────────┐
-                    │    OpenClaw Gateway           │
-                    │    (port 18789)               │
-                    │    - HTTP API endpoint        │
-                    │    - Auth token validation    │
-                    │    - Message ingestion        │
-                    └───────────────────────────────┘
-```
-
-### Key Fix: Proxy Injection
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Official Channel (Bug)        │  Standalone Bridge (Fixed)        │
-│────────────────────────────────┼──────────────────────────────────│
-│                                │                                   │
-│  Discord.js Client             │  Discord.js Client                │
-│  ┌──────────────────────┐     │  ┌──────────────────────┐         │
-│  │ WebSocket: ✓ Proxy   │     │  │ WebSocket: ✓ Proxy   │         │
-│  │ REST: ✗ No Proxy     │     │  │ REST: ✓ Proxy        │         │
-│  │ (fetch failed)       │     │  │ (via HttpsProxyAgent)│         │
-│  └──────────────────────┘     │  └──────────────────────┘         │
-│                               │            ▲                       │
-│  Config: proxy set            │            │                       │
-│  Result: Partial working      │  Config: proxy set                │
-│                               │  Result: Full proxy support        │
-└───────────────────────────────┴────────────────────────────────────┘
-```
+Python offers excellent proxy support through:
+- `aiohttp` with `ProxyConnector` - supports HTTP, HTTPS, SOCKS4, SOCKS5 proxies
+- `discord.py` - built-in proxy parameter for the Discord client
+- Simple async/await syntax for clean, maintainable code
 
 ## Quick Start
 
 ### Prerequisites
 
-- Node.js >= 18.0.0
+- Python >= 3.10
 - OpenClaw running with HTTP API enabled
 - A Discord bot token (get from [Discord Developer Portal](https://discord.com/developers/applications))
 
@@ -70,11 +37,12 @@ This standalone bridge provides a complete workaround by:
 git clone https://github.com/binary-rune/openclaw_discord_plugin.git
 cd openclaw_discord_plugin
 
-# Install dependencies
-npm install
+# Create virtual environment (recommended)
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Build the bridge
-npm run build
+# Install dependencies
+pip install -r requirements.txt
 ```
 
 ### Step 1: Configure OpenClaw HTTP API
@@ -82,7 +50,7 @@ npm run build
 First, you need to set up an auth token in OpenClaw for the bridge to use:
 
 ```bash
-# Generate a secure auth token (you can use any secure string)
+# Generate a secure auth token
 # Option A: Use openssl to generate one
 openssl rand -hex 32
 
@@ -107,6 +75,13 @@ openclaw gateway restart
 Create a `.env` file in the project directory:
 
 ```bash
+# Copy the example file
+cp .env.example .env
+```
+
+Edit `.env` with your settings:
+
+```bash
 # Required: Discord bot token
 DISCORD_TOKEN=YOUR_BOT_TOKEN_HERE
 
@@ -116,8 +91,9 @@ OPENCLAW_AUTH_TOKEN=YOUR_GENERATED_TOKEN
 # Optional: OpenClaw HTTP API URL (default: http://127.0.0.1:18789)
 OPENCLAW_HTTP_URL=http://127.0.0.1:18789
 
-# Optional: HTTP/HTTPS proxy URL (default: http://127.0.0.1:7890)
+# Optional: HTTP/HTTPS/SOCKS proxy URL (default: http://127.0.0.1:7890)
 # This is the KEY setting that fixes issue #27409
+# Supports: http://, https://, socks4://, socks5://
 PROXY_URL=http://127.0.0.1:7890
 
 # Optional: DM policy (open, pairing, allowlist, disabled)
@@ -136,11 +112,8 @@ ALLOW_FROM=123456789,987654321
 ### Step 3: Run the Bridge
 
 ```bash
-# Development mode (with ts-node)
-npm run start:dev
-
-# Or run the built version
-npm start
+# Run the bridge
+python bridge.py
 ```
 
 Or with environment variables directly:
@@ -150,7 +123,7 @@ DISCORD_TOKEN="YOUR_BOT_TOKEN" \
 OPENCLAW_AUTH_TOKEN="YOUR_TOKEN" \
 PROXY_URL="http://127.0.0.1:7890" \
 OPENCLAW_HTTP_URL="http://127.0.0.1:18789" \
-npm start
+python bridge.py
 ```
 
 ### Step 4: Test the Connection
@@ -161,7 +134,7 @@ npm start
 
 ```bash
 # Watch bridge logs
-npm start 2>&1 | tee bridge.log
+python bridge.py 2>&1 | tee bridge.log
 
 # Watch OpenClaw logs
 openclaw logs --follow
@@ -176,7 +149,7 @@ openclaw logs --follow
 | `DISCORD_TOKEN` | Yes | - | Discord bot token |
 | `OPENCLAW_AUTH_TOKEN` | Yes | - | Auth token for OpenClaw HTTP API |
 | `OPENCLAW_HTTP_URL` | No | `http://127.0.0.1:18789` | OpenClaw HTTP API URL |
-| `PROXY_URL` | No | `http://127.0.0.1:7890` | HTTP/HTTPS proxy URL |
+| `PROXY_URL` | No | `http://127.0.0.1:7890` | HTTP/HTTPS/SOCKS proxy URL |
 | `DM_POLICY` | No | `open` | DM policy: `open`, `pairing`, `allowlist`, `disabled` |
 | `GROUP_POLICY` | No | `allowlist` | Guild policy: `open`, `allowlist`, `disabled` |
 | `DEVICE_ID` | No | `openclaw-discord-bridge` | Device ID for session management |
@@ -184,6 +157,10 @@ openclaw logs --follow
 | `INTENT_MESSAGE_CONTENT` | No | `true` | Enable message content intent |
 | `INTENT_SERVER_MEMBERS` | No | `true` | Enable server members intent |
 | `INTENT_PRESENCE` | No | `false` | Enable presence intent |
+| `BOT_STATUS` | No | `online` | Bot status: `online`, `idle`, `dnd`, `invisible` |
+| `ACTIVITY_TYPE` | No | `2` | Activity type: 0=Playing, 1=Streaming, 2=Listening, 3=Watching, 4=Custom |
+| `ACTIVITY` | No | `OpenClaw Bridge` | Activity name shown in bot status |
+| `ACTIVITY_URL` | No | - | Activity URL (required for Streaming type) |
 
 ### DM Policies
 
@@ -198,6 +175,27 @@ openclaw logs --follow
 - `allowlist`: Only accept from configured guilds (TODO: implement guild config)
 - `disabled`: Reject all guild messages
 
+### Proxy URL Formats
+
+The bridge supports multiple proxy protocols:
+
+```bash
+# HTTP proxy
+PROXY_URL=http://127.0.0.1:7890
+
+# HTTPS proxy
+PROXY_URL=https://127.0.0.1:7890
+
+# SOCKS4 proxy
+PROXY_URL=socks4://127.0.0.1:1080
+
+# SOCKS5 proxy
+PROXY_URL=socks5://127.0.0.1:1080
+
+# SOCKS5 with authentication
+PROXY_URL=socks5://username:password@127.0.0.1:1080
+```
+
 ## Running as a Service
 
 ### systemd Service (Linux)
@@ -206,18 +204,19 @@ Create `/etc/systemd/system/openclaw-discord-bridge.service`:
 
 ```ini
 [Unit]
-Description=OpenClaw Discord Bridge
+Description=OpenClaw Discord Bridge (Python)
 After=network.target
 
 [Service]
 Type=simple
 User=your-user
 WorkingDirectory=/path/to/openclaw_discord_plugin
+Environment="PATH=/path/to/venv/bin"
 Environment=DISCORD_TOKEN=YOUR_BOT_TOKEN
 Environment=OPENCLAW_AUTH_TOKEN=YOUR_TOKEN
 Environment=PROXY_URL=http://127.0.0.1:7890
 Environment=OPENCLAW_HTTP_URL=http://127.0.0.1:18789
-ExecStart=/usr/bin/npm start
+ExecStart=/path/to/venv/bin/python bridge.py
 Restart=always
 RestartSec=10
 
@@ -244,29 +243,46 @@ sudo systemctl status openclaw-discord-bridge
 sudo journalctl -u openclaw-discord-bridge -f
 ```
 
-### pm2 (Node.js Process Manager)
+### pm2 (Python Process Manager)
 
 ```bash
 # Install pm2 globally
 npm install -g pm2
 
 # Start the bridge
-pm2 start npm --name "discord-bridge" -- start
+pm2 start bridge.py --name "discord-bridge" --interpreter python3
 
 # Or with environment variables
-pm2 start npm --name "discord-bridge" -- start -- \
-  --DISCORD_TOKEN="YOUR_TOKEN" \
-  --OPENCLAW_AUTH_TOKEN="YOUR_TOKEN" \
-  --PROXY_URL="http://127.0.0.1:7890"
-
-# Or use a pm2 ecosystem config file
-pm2 start ecosystem.config.js
+pm2 start bridge.py --name "discord-bridge" --interpreter python3 -- \
+  --env DISCORD_TOKEN="YOUR_TOKEN" \
+  --env OPENCLAW_AUTH_TOKEN="YOUR_TOKEN" \
+  --env PROXY_URL="http://127.0.0.1:7890"
 
 # View status
 pm2 status
 
 # View logs
 pm2 logs discord-bridge
+```
+
+### screen/tmux (Simple Background Running)
+
+```bash
+# Using screen
+screen -S discord-bridge
+python bridge.py
+# Press Ctrl+A, then D to detach
+
+# Reattach later
+screen -r discord-bridge
+
+# Using tmux
+tmux new -s discord-bridge
+python bridge.py
+# Press Ctrl+B, then D to detach
+
+# Reattach later
+tmux attach -t discord-bridge
 ```
 
 ## Discord Bot Setup
@@ -323,6 +339,15 @@ This is the exact issue this bridge fixes. If you still see these errors:
 
 3. Verify proxy supports HTTPS connections
 
+4. Try different proxy types:
+   ```bash
+   # HTTP proxy
+   PROXY_URL=http://127.0.0.1:7890
+   
+   # SOCKS5 proxy (often more reliable)
+   PROXY_URL=socks5://127.0.0.1:1080
+   ```
+
 ### Bridge won't start
 
 1. Check environment variables are set:
@@ -335,6 +360,16 @@ This is the exact issue this bridge fixes. If you still see these errors:
 3. Check OpenClaw is running and HTTP API is accessible:
    ```bash
    curl http://127.0.0.1:18789/api/health
+   ```
+
+4. Verify Python version:
+   ```bash
+   python --version  # Should be 3.10+
+   ```
+
+5. Check dependencies are installed:
+   ```bash
+   pip install -r requirements.txt
    ```
 
 ### Messages not reaching OpenClaw
@@ -366,36 +401,100 @@ This is the exact issue this bridge fixes. If you still see these errors:
 
 3. Verify DMs are enabled from server members
 
-## Comparison: Plugin vs Standalone Bridge
+### Proxy connection issues
 
-| Feature | Plugin Approach | Standalone Bridge |
-|---------|----------------|-------------------|
-| Proxy support (WebSocket) | ✅ | ✅ |
-| Proxy support (REST) | ✅ | ✅ |
-| Installation complexity | High (plugin system) | Low (standalone) |
-| Configuration | OpenClaw config | Environment variables |
-| Lifecycle | Tied to OpenClaw | Independent |
-| Debugging | Harder | Easier |
-| Restart impact | Requires OpenClaw restart | Independent restart |
-| HTTP API required | No | Yes |
+1. Test proxy connectivity:
+   ```bash
+   # Test HTTP proxy
+   curl -x http://127.0.0.1:7890 https://www.google.com
+   
+   # Test SOCKS proxy
+   curl --socks5 http://127.0.0.1:1080 https://www.google.com
+   ```
+
+2. Check if proxy requires authentication:
+   ```bash
+   # With authentication
+   curl -x http://user:pass@127.0.0.1:7890 https://www.google.com
+   ```
+
+3. Verify firewall rules allow proxy connections
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Standalone Bridge (Python)                    │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────┐ │
+│  │  Discord Bot    │───▶│  Message Router │───▶│  OpenClaw   │ │
+│  │  (with proxy)   │    │  (session mgmt) │    │  HTTP API   │ │
+│  └─────────────────┘    └─────────────────┘    └─────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+                    ┌───────────────────────────────┐
+                    │    OpenClaw Gateway           │
+                    │    (port 18789)               │
+                    │    - HTTP API endpoint        │
+                    │    - Auth token validation    │
+                    │    - Message ingestion        │
+                    └───────────────────────────────┘
+```
+
+### Key Fix: Proxy Injection
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Official Channel (Bug)        │  Standalone Bridge (Fixed)        │
+│────────────────────────────────┼──────────────────────────────────│
+│                                │                                   │
+│  Discord.js Client             │  discord.py Client                │
+│  ┌──────────────────────┐     │  ┌──────────────────────┐         │
+│  │ WebSocket: ✓ Proxy   │     │  │ WebSocket: ✓ Proxy   │         │
+│  │ REST: ✗ No Proxy     │     │  │ REST: ✓ Proxy        │         │
+│  │ (fetch failed)       │     │  │ (via ProxyConnector) │         │
+│  └──────────────────────┘     │  └──────────────────────┘         │
+│  Config: proxy set            │            ▲                       │
+│  Result: Partial working      │  Config: proxy set                │
+│                               │  Result: Full proxy support        │
+└───────────────────────────────┴────────────────────────────────────┘
+```
 
 ## Development
 
 ```bash
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
 # Install dependencies
-npm install
+pip install -r requirements.txt
 
-# Build TypeScript
-npm run build
+# Run the bridge
+python bridge.py
 
-# Watch mode (auto-rebuild on changes)
-npm run watch
+# Run with debug logging
+PYTHONDEBUG=1 python bridge.py
 
-# Run development version
-npm run start:dev
+# Install development dependencies (optional)
+pip install pytest pytest-asyncio black isort
+```
 
-# Clean build artifacts
-npm run clean
+## Project Structure
+
+```
+openclaw_discord_patch/
+├── bridge.py          # Main bridge application
+├── config.py          # Configuration loading
+├── types.py           # Type definitions
+├── requirements.txt   # Python dependencies
+├── .env.example       # Example environment configuration
+├── README.md          # This file
+└── src/               # Legacy TypeScript code (deprecated)
+    ├── bridge.ts
+    ├── client.ts
+    ├── types.ts
+    └── index.ts
 ```
 
 ## Security Considerations
@@ -408,12 +507,28 @@ npm run clean
 
 4. **Network**: The bridge should run on the same network as OpenClaw, or use TLS for remote connections.
 
-## License
+5. **Environment Variables**: Use `.env` file (gitignored) or system environment variables. Never hardcode secrets.
 
-MIT License
+## Comparison: TypeScript vs Python
+
+| Feature | TypeScript (Legacy) | Python (Current) |
+|---------|---------------------|------------------|
+| Proxy support (WebSocket) | ✅ | ✅ |
+| Proxy support (REST) | ✅ | ✅ |
+| Proxy protocols | HTTP, HTTPS | HTTP, HTTPS, SOCKS4, SOCKS5 |
+| Runtime | Node.js 18+ | Python 3.10+ |
+| Dependencies | discord.js, https-proxy-agent | discord.py, aiohttp, aiohttp-socks |
+| Setup complexity | Medium (npm, build) | Low (pip, no build) |
+| Proxy configuration | Manual agent injection | Built-in support |
 
 ## Related Links
 
 - [OpenClaw Documentation](https://docs.openclaw.ai/)
 - [Discord Developer Portal](https://discord.com/developers/applications)
 - [Issue #27409](https://github.com/openclaw/openclaw/issues/27409)
+- [discord.py Documentation](https://discordpy.readthedocs.io/)
+- [aiohttp Documentation](https://docs.aiohttp.org/)
+
+## License
+
+MIT License
